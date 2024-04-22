@@ -1,0 +1,9 @@
+vendor
+*.exe
+.idea
+.vscode
+glove80.uf2
+temp.zip
+.env
+
+.DS_Store
