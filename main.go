@@ -93,6 +93,8 @@ func flash(owner string, repo string, glovePath string) (err error) {
 		return
 	}
 
+	fmt.Printf("Downloading latest uf2 artifact from %s/%s\n", owner, repo)
+
 	token := os.Getenv("GITHUB_PAT")
 	client := github.NewClient(nil).WithAuthToken(token)
 
@@ -116,16 +118,19 @@ func flash(owner string, repo string, glovePath string) (err error) {
 	// Rename the file to a known one after it's extracted?
 	defer os.Remove(artifactPath)
 
+	fmt.Println("Copying uf2 to left glove")
 	err = copy(artifactPath, filepath.Join(glovePath, leftGloveFilename, artifactFilename))
 	if err != nil {
 		return
 	}
 
+	fmt.Println("Copying uf2 to right glove")
 	err = copy(artifactPath, filepath.Join(glovePath, rightGloveFilename, artifactFilename))
 	if err != nil {
 		return
 	}
 
+	fmt.Println("Success!")
 	return nil
 }
 
