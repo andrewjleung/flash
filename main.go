@@ -17,8 +17,8 @@ import (
 const defaultGloveDirectory = "/Volumes"
 const leftGloveFilename = "GLV80LHBOOT"
 const rightGloveFilename = "GLV80RHBOOT"
-const tempPath = "./temp.zip"
-const extractedPath = "./glove80.uf2"
+const tempArtifactZipFilename = "temp.zip"
+const artifactFilename = "glove80.uf2"
 
 func verifyGlovesConnected(glovePath string) (err error) {
 	lconnected, err := exists(filepath.Join(glovePath, leftGloveFilename))
@@ -42,25 +42,15 @@ func verifyGlovesConnected(glovePath string) (err error) {
 	return
 }
 
-func flash(owner string, repo string, glovePath string) (err error) {
-	// Verify that both gloves are connected in bootloader mass storage device mode
-	err = verifyGlovesConnected(glovePath)
-	if err != nil {
-		return
-	}
-
-	// Get the ID of the latest built uf2 artifact
-	token := os.Getenv("GITHUB_PAT")
-	client := github.NewClient(nil).WithAuthToken(token)
-
+func getLatestArtifactId(client *github.Client, owner string, repo string) (int, error) {
 	artifacts, _, err := client.Actions.ListArtifacts(context.Background(), owner, repo, nil)
 
 	if err != nil {
-		return
+		return 0, err
 	}
 
 	if len(artifacts.Artifacts) < 1 {
-		return errors.New("No artifacts to flash")
+		return 0, errors.New("No artifacts to flash")
 	}
 
 	slices.SortFunc(artifacts.Artifacts, func(i, j *github.Artifact) int {
@@ -68,40 +58,70 @@ func flash(owner string, repo string, glovePath string) (err error) {
 	})
 
 	latestArtifact := artifacts.Artifacts[0]
+	return int(latestArtifact.GetID()), nil
+}
 
-	// Download the latest zipped built uf2 artifact
-	artifactUrl, _, err := client.Actions.DownloadArtifact(context.Background(), owner, repo, *latestArtifact.ID, 1)
+func downloadArtifact(client *github.Client, owner string, repo string, artifactId int64) error {
+	artifactUrl, _, err := client.Actions.DownloadArtifact(context.Background(), owner, repo, int64(artifactId), 1)
 
+	if err != nil {
+		return err
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
+	downloadDestination := filepath.Join(cwd, tempArtifactZipFilename)
+	if err := downloadFile(downloadDestination, artifactUrl.String()); err != nil {
+		return err
+	}
+
+	defer os.Remove(downloadDestination)
+
+	if err := unzip(downloadDestination, cwd); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func flash(owner string, repo string, glovePath string) (err error) {
+	err = verifyGlovesConnected(glovePath)
 	if err != nil {
 		return
 	}
 
-	if err := downloadFile(tempPath, artifactUrl.String()); err != nil {
-		return err
+	token := os.Getenv("GITHUB_PAT")
+	client := github.NewClient(nil).WithAuthToken(token)
+
+	artifactId, err := getLatestArtifactId(client, owner, repo)
+	if err != nil {
+		return
 	}
 
-	defer os.Remove(tempPath)
+	if err = downloadArtifact(client, owner, repo, int64(artifactId)); err != nil {
+		return
+	}
 
-	// Unzip the uf2 artifact
 	cwd, err := os.Getwd()
 	if err != nil {
 		return
 	}
 
-	if err := unzip(tempPath, cwd); err != nil {
-		return err
-	}
+	artifactPath := filepath.Join(cwd, artifactFilename)
 
 	// TODO: What if it's not extracted with this name?
-	defer os.Remove(extractedPath)
+	// Rename the file to a known one after it's extracted?
+	defer os.Remove(artifactPath)
 
-	// Copy the uf2 to each glove
-	err = copy(extractedPath, filepath.Join(glovePath, leftGloveFilename, extractedPath))
+	err = copy(artifactPath, filepath.Join(glovePath, leftGloveFilename, artifactFilename))
 	if err != nil {
 		return
 	}
 
-	err = copy(extractedPath, filepath.Join(glovePath, rightGloveFilename, extractedPath))
+	err = copy(artifactPath, filepath.Join(glovePath, rightGloveFilename, artifactFilename))
 	if err != nil {
 		return
 	}
