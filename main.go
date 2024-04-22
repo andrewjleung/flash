@@ -1,166 +1,52 @@
 package main
 
 import (
-	"archive/zip"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
 
 	"github.com/google/go-github/v61/github"
-	"golang.org/x/net/context"
-
 	"github.com/joho/godotenv"
+	"github.com/urfave/cli/v3"
+	"golang.org/x/net/context"
 )
 
-const owner = "andrewjleung"
-const repo = "zmk-config"
-
-// const leftGloveLocation = "/Volumes/GLV80LHBOOT"
-const leftGloveLocation = "/Users/andrewleung/Desktop/fake_glove/GLV80LHBOOT"
-
-// const rightGloveLocation = "/Volumes/GLV80RHBOOT"
-const rightGloveLocation = "/Users/andrewleung/Desktop/fake_glove/GLV80RHBOOT"
+const defaultGloveDirectory = "/Volumes"
+const leftGloveFilename = "GLV80LHBOOT"
+const rightGloveFilename = "GLV80RHBOOT"
 const tempPath = "./temp.zip"
 const extractedPath = "./glove80.uf2"
 
-func downloadFile(filepath string, url string) error {
-	// Retrieve the file w/ HTTP.
-	resp, err := http.Get(url)
+func verifyGlovesConnected(glovePath string) (err error) {
+	lconnected, err := exists(filepath.Join(glovePath, leftGloveFilename))
 	if err != nil {
-		return err
+		return
 	}
 
-	defer resp.Body.Close()
-
-	// Create the file.
-	out, err := os.Create(filepath)
+	rconnected, err := exists(filepath.Join(glovePath, rightGloveFilename))
 	if err != nil {
-		return err
+		return
 	}
 
-	defer out.Close()
-
-	// Copy the file contents to the file.
-	_, err = io.Copy(out, resp.Body)
-
-	return err
-}
-
-func extract(f *zip.File, dest string) error {
-	// Open the unzipped file.
-	rc, err := f.Open()
-	if err != nil {
-		return err
+	if !lconnected {
+		err = errors.Join(err, errors.New("Left glove not connected in bootloader mass storage device mode"))
 	}
 
-	defer rc.Close()
-
-	path := filepath.Join(dest, f.Name)
-
-	// Assuming the file is not a directory, make any non-existing parent directories.
-	os.MkdirAll(filepath.Dir(path), f.Mode())
-
-	// Create the file.
-	nf, err := os.Create(path)
-	if err != nil {
-		return err
+	if !rconnected {
+		err = errors.Join(err, errors.New("Right glove not connected in bootloader mass storage device mode"))
 	}
 
-	defer nf.Close()
-
-	// Copy the file contents to it.
-	_, err = io.Copy(nf, rc)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func copy(from, to string) error {
-	r, err := os.Open(from)
-	if err != nil {
-		return err
-	}
-
-	defer r.Close()
-
-	w, err := os.Create(to)
-	if err != nil {
-		return err
-	}
-
-	defer w.Close()
-
-	if _, err := io.Copy(w, r); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func unzip(filepath string, dest string) error {
-	r, err := zip.OpenReader(filepath)
-	if err != nil {
-		return err
-	}
-
-	defer r.Close()
-
-	for _, f := range r.File {
-		if err := extract(f, dest); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func exists(path string) (bool, error) {
-	_, err := os.Stat(path)
-	if err == nil {
-		return true, nil
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	return false, err
-}
-
-func glovesConnected() (lconnected bool, rconnected bool, err error) {
-	lconnected, lerr := exists(leftGloveLocation)
-	rconnected, rerr := exists(rightGloveLocation)
-	err = errors.Join(lerr, rerr)
 	return
 }
 
-func main() {
-	if err := godotenv.Load(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
+func flash(owner string, repo string, glovePath string) (err error) {
 	// Verify that both gloves are connected in bootloader mass storage device mode
-	lconnected, rconnected, err := glovesConnected()
+	err = verifyGlovesConnected(glovePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
-	if !(lconnected && rconnected) {
-		if !lconnected {
-			fmt.Println("Left glove not connected in bootloader mass storage device mode")
-		}
-
-		if !rconnected {
-			fmt.Println("Right glove not connected in bootloader mass storage device mode")
-		}
-
-		os.Exit(1)
+		return
 	}
 
 	// Get the ID of the latest built uf2 artifact
@@ -170,13 +56,11 @@ func main() {
 	artifacts, _, err := client.Actions.ListArtifacts(context.Background(), owner, repo, nil)
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return
 	}
 
 	if len(artifacts.Artifacts) < 1 {
-		fmt.Fprintln(os.Stderr, "error: no artifacts to flash")
-		os.Exit(1)
+		return errors.New("No artifacts to flash")
 	}
 
 	slices.SortFunc(artifacts.Artifacts, func(i, j *github.Artifact) int {
@@ -189,38 +73,86 @@ func main() {
 	artifactUrl, _, err := client.Actions.DownloadArtifact(context.Background(), owner, repo, *latestArtifact.ID, 1)
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return
 	}
 
 	if err := downloadFile(tempPath, artifactUrl.String()); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	defer os.Remove(tempPath)
 
 	// Unzip the uf2 artifact
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return
 	}
 
 	if err := unzip(tempPath, cwd); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	// TODO: What if it's not extracted with this name?
 	defer os.Remove(extractedPath)
 
 	// Copy the uf2 to each glove
-	copy(extractedPath, filepath.Join(leftGloveLocation, extractedPath))
-	copy(extractedPath, filepath.Join(rightGloveLocation, extractedPath))
+	err = copy(extractedPath, filepath.Join(glovePath, leftGloveFilename, extractedPath))
+	if err != nil {
+		return
+	}
+
+	err = copy(extractedPath, filepath.Join(glovePath, rightGloveFilename, extractedPath))
+	if err != nil {
+		return
+	}
+
+	return nil
+}
+
+func main() {
+	directory := defaultGloveDirectory
+
+	cmd := &cli.Command{
+		Name:  "flash",
+		Usage: "Utility for flashing new config to a Glove80 from a ZMK repo",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:        "directory",
+				Usage:       "Specify the directory where the Glove80 bootloader storage directories will appear, defaults to the `/Volumes` directory",
+				Destination: &directory,
+				Aliases:     []string{"d"},
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if err := godotenv.Load(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+
+			owner, set := os.LookupEnv("OWNER")
+			if !set {
+				fmt.Fprintln(os.Stderr, "No OWNER provided in env")
+				os.Exit(1)
+			}
+
+			repo, set := os.LookupEnv("REPO")
+			if !set {
+				fmt.Fprintln(os.Stderr, "No REPO provided in env")
+				os.Exit(1)
+			}
+
+			_, set = os.LookupEnv("GITHUB_PAT")
+			if !set {
+				fmt.Fprintln(os.Stderr, "No GITHUB_PAT provided in env")
+				os.Exit(1)
+			}
+
+			err := flash(owner, repo, directory)
+			return err
+		},
+	}
+
+	if err := cmd.Run(context.Background(), os.Args); err != nil {
+		log.Fatal(err)
+	}
 }

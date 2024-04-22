@@ -5,7 +5,9 @@ go 1.21.1
 require (
 	github.com/google/go-github/v61 v61.0.0
 	github.com/joho/godotenv v1.5.1
+	github.com/urfave/cli v1.22.14
 	github.com/urfave/cli/v2 v2.27.1
+	github.com/urfave/cli/v3 v3.0.0-alpha9
 	golang.org/x/net v0.24.0
 )
 
