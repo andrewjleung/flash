@@ -42,23 +42,24 @@ func verifyGlovesConnected(glovePath string) (err error) {
 	return
 }
 
-func getLatestArtifactId(client *github.Client, owner string, repo string) (int, error) {
+func getLatestArtifact(client *github.Client, owner string, repo string) (*github.Artifact, error) {
 	artifacts, _, err := client.Actions.ListArtifacts(context.Background(), owner, repo, nil)
 
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	if len(artifacts.Artifacts) < 1 {
-		return 0, errors.New("No artifacts to flash")
+		return nil, errors.New("No artifacts to flash")
 	}
 
 	slices.SortFunc(artifacts.Artifacts, func(i, j *github.Artifact) int {
-		return i.CreatedAt.GetTime().Compare(*j.CreatedAt.GetTime())
+		return j.CreatedAt.GetTime().Compare(*i.CreatedAt.GetTime())
 	})
 
 	latestArtifact := artifacts.Artifacts[0]
-	return int(latestArtifact.GetID()), nil
+
+	return latestArtifact, nil
 }
 
 func downloadArtifact(client *github.Client, owner string, repo string, artifactId int64) error {
@@ -87,24 +88,38 @@ func downloadArtifact(client *github.Client, owner string, repo string, artifact
 	return nil
 }
 
-func flash(owner string, repo string, glovePath string) (err error) {
-	err = verifyGlovesConnected(glovePath)
+type FlashConfig struct {
+	owner     string
+	repo      string
+	glovePath string
+}
+
+func flash(config FlashConfig) (err error) {
+	err = verifyGlovesConnected(config.glovePath)
 	if err != nil {
 		return
 	}
 
-	fmt.Printf("Downloading latest uf2 artifact from %s/%s\n", owner, repo)
+	fmt.Printf("Downloading latest uf2 artifact from %s/%s\n", config.owner, config.repo)
 
 	token := os.Getenv("GITHUB_PAT")
 	client := github.NewClient(nil).WithAuthToken(token)
 
-	artifactId, err := getLatestArtifactId(client, owner, repo)
+	fmt.Println("Successfully authenticated with GitHub")
+
+	artifact, err := getLatestArtifact(client, config.owner, config.repo)
 	if err != nil {
-		return
+		return fmt.Errorf("Error fetching latest uf2 artifact ID: %w", err)
 	}
 
-	if err = downloadArtifact(client, owner, repo, int64(artifactId)); err != nil {
-		return
+	fmt.Printf("Latest artifact is %d created at %v\n", artifact.GetID(), artifact.GetCreatedAt())
+
+	if artifact.GetExpired() {
+		return errors.New("Latest artifact is expired")
+	}
+
+	if err = downloadArtifact(client, config.owner, config.repo, artifact.GetID()); err != nil {
+		return fmt.Errorf("Error downloading latest uf2 artifact: %w", err)
 	}
 
 	cwd, err := os.Getwd()
@@ -118,14 +133,16 @@ func flash(owner string, repo string, glovePath string) (err error) {
 	// Rename the file to a known one after it's extracted?
 	defer os.Remove(artifactPath)
 
-	fmt.Println("Copying uf2 to left glove")
-	err = copy(artifactPath, filepath.Join(glovePath, leftGloveFilename, artifactFilename))
+	leftGlovePath := filepath.Join(config.glovePath, leftGloveFilename, artifactFilename)
+	fmt.Printf("Copying uf2 to left glove at %v\n", leftGlovePath)
+	err = copy(artifactPath, leftGlovePath)
 	if err != nil {
 		return
 	}
 
-	fmt.Println("Copying uf2 to right glove")
-	err = copy(artifactPath, filepath.Join(glovePath, rightGloveFilename, artifactFilename))
+	rightGlovePath := filepath.Join(config.glovePath, rightGloveFilename, artifactFilename)
+	fmt.Printf("Copying uf2 to right glove at %v\n", rightGlovePath)
+	err = copy(artifactPath, rightGlovePath)
 	if err != nil {
 		return
 	}
@@ -172,7 +189,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			err := flash(owner, repo, directory)
+			err := flash(FlashConfig{owner: owner, repo: repo, glovePath: directory})
 			return err
 		},
 	}
