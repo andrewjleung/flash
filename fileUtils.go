@@ -79,7 +79,10 @@ func copy(from, to string) error {
 	defer w.Close()
 
 	if _, err := io.Copy(w, r); err != nil {
-		return err
+		// TODO: The glove is configured to automatically eject once the flash is
+		// complete, but this ends up causing an IO error for Copy. Figure out a
+		// way to handle this error.
+		return nil
 	}
 
 	return nil

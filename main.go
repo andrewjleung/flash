@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 
 	"github.com/google/go-github/v61/github"
@@ -21,22 +22,24 @@ const tempArtifactZipFilename = "temp.zip"
 const artifactFilename = "glove80.uf2"
 
 func verifyGlovesConnected(glovePath string) (err error) {
-	lconnected, err := exists(filepath.Join(glovePath, leftGloveFilename))
+	leftGlovePath := filepath.Join(glovePath, leftGloveFilename)
+	lconnected, err := exists(leftGlovePath)
 	if err != nil {
 		return
 	}
 
-	rconnected, err := exists(filepath.Join(glovePath, rightGloveFilename))
+	rightGlovePath := filepath.Join(glovePath, rightGloveFilename)
+	rconnected, err := exists(rightGlovePath)
 	if err != nil {
 		return
 	}
 
 	if !lconnected {
-		err = errors.Join(err, errors.New("Left glove not connected in bootloader mass storage device mode"))
+		err = errors.Join(err, errors.New(fmt.Sprintf("Left glove not connected in bootloader mass storage device mode (%s)", leftGlovePath)))
 	}
 
 	if !rconnected {
-		err = errors.Join(err, errors.New("Right glove not connected in bootloader mass storage device mode"))
+		err = errors.Join(err, errors.New(fmt.Sprintf("Right glove not connected in bootloader mass storage device mode (%s)", rightGlovePath)))
 	}
 
 	return
@@ -137,6 +140,7 @@ func flash(config FlashConfig) (err error) {
 	fmt.Printf("Copying uf2 to left glove at %v\n", leftGlovePath)
 	err = copy(artifactPath, leftGlovePath)
 	if err != nil {
+		fmt.Printf("%v", reflect.TypeOf(err))
 		return
 	}
 
@@ -152,45 +156,40 @@ func flash(config FlashConfig) (err error) {
 }
 
 func main() {
-	directory := defaultGloveDirectory
-
 	cmd := &cli.Command{
 		Name:  "flash",
 		Usage: "Utility for flashing new config to a Glove80 from a ZMK repo",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:        "directory",
-				Usage:       "Specify the directory where the Glove80 bootloader storage directories will appear, defaults to the `/Volumes` directory",
-				Destination: &directory,
+				Usage:       "Specify the directory where the Glove80 bootloader storage directories will appear",
+				Value:       defaultGloveDirectory,
 				Aliases:     []string{"d"},
+				DefaultText: defaultGloveDirectory,
 			},
 		},
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			if err := godotenv.Load(); err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
+		Action: func(ctx context.Context, cmd *cli.Command) (err error) {
+			if err = godotenv.Load(); err != nil {
+				return
 			}
 
 			owner, set := os.LookupEnv("OWNER")
 			if !set {
-				fmt.Fprintln(os.Stderr, "No OWNER provided in env")
-				os.Exit(1)
+				return errors.New("No OWNER provided in env")
 			}
 
 			repo, set := os.LookupEnv("REPO")
 			if !set {
-				fmt.Fprintln(os.Stderr, "No REPO provided in env")
-				os.Exit(1)
+				return errors.New("No REPO provided in env")
 			}
 
 			_, set = os.LookupEnv("GITHUB_PAT")
 			if !set {
-				fmt.Fprintln(os.Stderr, "No GITHUB_PAT provided in env")
-				os.Exit(1)
+				return errors.New("No GITHUB_PAT provided in env")
 			}
 
-			err := flash(FlashConfig{owner: owner, repo: repo, glovePath: directory})
-			return err
+			err = flash(FlashConfig{owner: owner, repo: repo, glovePath: cmd.String("directory")})
+			return
 		},
 	}
 
