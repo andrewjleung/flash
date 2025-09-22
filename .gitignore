@@ -7,3 +7,5 @@ temp.zip
 .env
 
 .DS_Store
+
+bin

@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 
 	"github.com/google/go-github/v61/github"
@@ -15,45 +14,46 @@ import (
 	"golang.org/x/net/context"
 )
 
-const defaultGloveDirectory = "/Volumes"
-const leftGloveFilename = "GLV80LHBOOT"
-const rightGloveFilename = "GLV80RHBOOT"
-const tempArtifactZipFilename = "temp.zip"
-const artifactFilename = "glove80.uf2"
+const (
+	defaultGloveDirectory   = "/Volumes"
+	leftGloveFilename       = "GLV80LHBOOT"
+	rightGloveFilename      = "GLV80RHBOOT"
+	tempArtifactZipFilename = "temp.zip"
+	artifactFilename        = "glove80.uf2"
+)
 
 func verifyGlovesConnected(glovePath string) (err error) {
 	leftGlovePath := filepath.Join(glovePath, leftGloveFilename)
 	lconnected, err := exists(leftGlovePath)
 	if err != nil {
-		return
+		return err
 	}
 
 	rightGlovePath := filepath.Join(glovePath, rightGloveFilename)
 	rconnected, err := exists(rightGlovePath)
 	if err != nil {
-		return
+		return err
 	}
 
 	if !lconnected {
-		err = errors.Join(err, errors.New(fmt.Sprintf("Left glove not connected in bootloader mass storage device mode (%s)", leftGlovePath)))
+		err = errors.Join(err, fmt.Errorf("left glove not connected in bootloader mass storage device mode (%s)", leftGlovePath))
 	}
 
 	if !rconnected {
-		err = errors.Join(err, errors.New(fmt.Sprintf("Right glove not connected in bootloader mass storage device mode (%s)", rightGlovePath)))
+		err = errors.Join(err, fmt.Errorf("right glove not connected in bootloader mass storage device mode (%s)", rightGlovePath))
 	}
 
-	return
+	return err
 }
 
 func getLatestArtifact(client *github.Client, owner string, repo string) (*github.Artifact, error) {
 	artifacts, _, err := client.Actions.ListArtifacts(context.Background(), owner, repo, nil)
-
 	if err != nil {
 		return nil, err
 	}
 
 	if len(artifacts.Artifacts) < 1 {
-		return nil, errors.New("No artifacts to flash")
+		return nil, errors.New("no artifacts to flash")
 	}
 
 	slices.SortFunc(artifacts.Artifacts, func(i, j *github.Artifact) int {
@@ -65,9 +65,8 @@ func getLatestArtifact(client *github.Client, owner string, repo string) (*githu
 	return latestArtifact, nil
 }
 
-func downloadArtifact(client *github.Client, owner string, repo string, artifactId int64) error {
-	artifactUrl, _, err := client.Actions.DownloadArtifact(context.Background(), owner, repo, int64(artifactId), 1)
-
+func downloadArtifact(client *github.Client, owner string, repo string, artifactID int64) error {
+	artifactURL, _, err := client.Actions.DownloadArtifact(context.Background(), owner, repo, int64(artifactID), 1)
 	if err != nil {
 		return err
 	}
@@ -78,7 +77,7 @@ func downloadArtifact(client *github.Client, owner string, repo string, artifact
 	}
 
 	downloadDestination := filepath.Join(cwd, tempArtifactZipFilename)
-	if err := downloadFile(downloadDestination, artifactUrl.String()); err != nil {
+	if err := downloadFile(downloadDestination, artifactURL.String()); err != nil {
 		return err
 	}
 
@@ -100,7 +99,7 @@ type FlashConfig struct {
 func flash(config FlashConfig) (err error) {
 	err = verifyGlovesConnected(config.glovePath)
 	if err != nil {
-		return
+		return err
 	}
 
 	fmt.Printf("Downloading latest uf2 artifact from %s/%s\n", config.owner, config.repo)
@@ -112,22 +111,22 @@ func flash(config FlashConfig) (err error) {
 
 	artifact, err := getLatestArtifact(client, config.owner, config.repo)
 	if err != nil {
-		return fmt.Errorf("Error fetching latest uf2 artifact ID: %w", err)
+		return fmt.Errorf("error fetching latest uf2 artifact ID: %w", err)
 	}
 
 	fmt.Printf("Latest artifact is %d created at %v\n", artifact.GetID(), artifact.GetCreatedAt())
 
 	if artifact.GetExpired() {
-		return errors.New("Latest artifact is expired")
+		return errors.New("latest artifact is expired")
 	}
 
 	if err = downloadArtifact(client, config.owner, config.repo, artifact.GetID()); err != nil {
-		return fmt.Errorf("Error downloading latest uf2 artifact: %w", err)
+		return fmt.Errorf("error downloading latest uf2 artifact: %w", err)
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		return
+		return err
 	}
 
 	artifactPath := filepath.Join(cwd, artifactFilename)
@@ -140,15 +139,14 @@ func flash(config FlashConfig) (err error) {
 	fmt.Printf("Copying uf2 to left glove at %v\n", leftGlovePath)
 	err = copy(artifactPath, leftGlovePath)
 	if err != nil {
-		fmt.Printf("%v", reflect.TypeOf(err))
-		return
+		return err
 	}
 
 	rightGlovePath := filepath.Join(config.glovePath, rightGloveFilename, artifactFilename)
 	fmt.Printf("Copying uf2 to right glove at %v\n", rightGlovePath)
 	err = copy(artifactPath, rightGlovePath)
 	if err != nil {
-		return
+		return err
 	}
 
 	fmt.Println("Success!")
@@ -170,26 +168,26 @@ func main() {
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) (err error) {
 			if err = godotenv.Load(); err != nil {
-				return
+				return err
 			}
 
 			owner, set := os.LookupEnv("OWNER")
 			if !set {
-				return errors.New("No OWNER provided in env")
+				return errors.New("no OWNER provided in env")
 			}
 
 			repo, set := os.LookupEnv("REPO")
 			if !set {
-				return errors.New("No REPO provided in env")
+				return errors.New("no REPO provided in env")
 			}
 
 			_, set = os.LookupEnv("GITHUB_PAT")
 			if !set {
-				return errors.New("No GITHUB_PAT provided in env")
+				return errors.New("no GITHUB_PAT provided in env")
 			}
 
 			err = flash(FlashConfig{owner: owner, repo: repo, glovePath: cmd.String("directory")})
-			return
+			return err
 		},
 	}
 
