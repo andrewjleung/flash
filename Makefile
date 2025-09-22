@@ -1,7 +1,7 @@
-run: build
+run: ./bin/flash
 	./bin/flash
 .PHONY: run
 
-build:
+./bin/flash:
 	go build -o ./bin/flash
 .PHONY: build
